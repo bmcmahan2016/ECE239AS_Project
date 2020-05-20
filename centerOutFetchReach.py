@@ -5,7 +5,8 @@ Created on Sun May 17 17:14:47 2020
 @author: bmcma
 
 DESCRIPTION:
-
+    Train an agent to perform the center out reach task in the FetchReach-v1
+    open AI gym environmnet
 """
 
 import numpy as np
