@@ -55,26 +55,11 @@ def  setTargetPosition(env):
     # manual place target at desired location
     env.env.goal = reachTargetPos
 
-NUM_EPISODES = 20        # number of episodes we will train on
-lr = 1e-3               # learning rate for Q-learning
-discountFactor = 0.5    # discount factor 
-
-env = gym.make('FetchReach-v1')
-obs = env.reset()
-# manual over-ride of target position
-setTargetPosition(env)
-done = False
-
-theta = np.random.randn((40))     # linear function approximation vector
-actionTheta = np.zeros((4))
-nextActionTheta = np.zeros((4))
-
-
-
 def policy(actionTheta):
-    # Here you would implement your smarter policy. In this case,
-    # we just sample random actions.
-    # I am first going to try to do greedy Q action selection
+    '''
+    stub implementation. currently this is just choosing a epsilon greedy action
+    based on meaningless features
+    '''
     randomAction = env.action_space.sample()
     T = np.random.rand()
     thetaQ = theta[-4:]
@@ -83,6 +68,23 @@ def policy(actionTheta):
         return randomAction
     else:
         return greedyAction
+
+# define some values
+NUM_EPISODES = 20        # number of episodes we will train on
+lr = 1e-3               # learning rate for Q-learning
+discountFactor = 0.5    # discount factor 
+
+# create the environment
+env = gym.make('FetchReach-v1')
+obs = env.reset()
+# manual over-ride of target position
+setTargetPosition(env)
+done = False
+
+# this is code for features, which are currently meaningless
+theta = np.random.randn((40))     # linear function approximation vector
+actionTheta = np.zeros((4))
+nextActionTheta = np.zeros((4))
 
 currEpisodeNum = 0       # initialize episode counter
 lastState = env.reset()['observation'].reshape(-1,1)
