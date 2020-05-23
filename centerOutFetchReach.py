@@ -20,6 +20,40 @@ import gym
 # comment line below if you are running without cuda
 device = torch.device("cuda")
 
+
+class valueNet(nn.Module):
+    
+    def __init__(self):
+        super(valueNet, self).__init__()
+        self.fc1 = nn.Linear(16, 8)
+        self.fc2 = nn.Linear(8, 4)
+        self.fc3 = nn.Linear(4, 1)
+        # variance of gaussian from which we draw actions; treated as hyper-parameter
+        self.var = 1
+        
+    def forward(self, state):
+        # flatten the state into a vector (16,)
+        x = np.hstack((state['observation'], state['achieved_goal'], state['desired_goal']))
+        # place state vector into a torch tensor
+        x = torch.from_numpy(x).to(device)
+        x = x.float()
+        x = x.unsqueeze(0)
+        # shape into a torch column vector
+        x = x.view(-1, self.num_flat_features(x))
+        # forward pass 
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        value = x.cpu().detach().numpy().reshape(1)
+        return value
+
+    def num_flat_features(self, x):
+        size = x.size()[1:]  # all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features
+
 class policyNet(nn.Module):
     
     def __init__(self):
@@ -98,16 +132,18 @@ def  setTargetPosition(env):
 
 
 # define some values
-NUM_EPISODES = 20        # number of episodes we will train on
+NUM_EPISODES = 5        # number of episodes we will train on
 lr = 1e-3               # learning rate for Q-learning
 discountFactor = 0.5    # discount factor 
 
 # create the environment
 env = gym.make('FetchReach-v1')
-# create policy network
+# create policy and value networks
 policy = policyNet().to(device)
-obs = env.reset()
+value = valueNet().to(device)
+
 # manual over-ride of target position
+obs = env.reset()
 setTargetPosition(env)
 done = False
 
@@ -124,7 +160,7 @@ while ( currEpisodeNum < NUM_EPISODES ):
         setTargetPosition(env)
         
     
-    print('\n\last action\n', action)
+    print('\n\nlast action\n', action)
 
    
     # If we want, we can substitute a goal here and re-compute
