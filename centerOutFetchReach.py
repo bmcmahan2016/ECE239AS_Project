@@ -10,7 +10,48 @@ DESCRIPTION:
 """
 
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
 import gym
+
+
+# comment line below if you are running without cuda
+device = torch.device("cuda")
+
+class policyNet(nn.Module):
+    
+    def __init__(self):
+        super(policyNet, self).__init__()
+        self.fc1 = nn.Linear(16, 8)
+        self.fc2 = nn.Linear(8, 8)
+        self.fc3 = nn.Linear(8, 4)
+        # variance of gaussian from which we draw actions; treated as hyper-parameter
+        self.var = 1
+        
+    def forward(self, state):
+        # flatten the state into a vector (16,)
+        x = np.hstack((state['observation'], state['achieved_goal'], state['desired_goal']))
+        # place state vector into a torch tensor
+        x = torch.from_numpy(x).to(device)
+        x = x.float()
+        x = x.unsqueeze(0)
+        # shape into a torch column vector
+        x = x.view(-1, self.num_flat_features(x))
+        # forward pass 
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        action = x.cpu().detach().numpy().reshape(4)
+        return action + self.var*np.random.randn(4)
+
+    def num_flat_features(self, x):
+        size = x.size()[1:]  # all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features
 
 def  setTargetPosition(env):
     '''
@@ -55,19 +96,6 @@ def  setTargetPosition(env):
     # manual place target at desired location
     env.env.goal = reachTargetPos
 
-def policy(actionTheta):
-    '''
-    stub implementation. currently this is just choosing a epsilon greedy action
-    based on meaningless features
-    '''
-    randomAction = env.action_space.sample()
-    T = np.random.rand()
-    thetaQ = theta[-4:]
-    greedyAction = np.sign(thetaQ)
-    if T > 0.8:
-        return randomAction
-    else:
-        return greedyAction
 
 # define some values
 NUM_EPISODES = 20        # number of episodes we will train on
@@ -76,27 +104,18 @@ discountFactor = 0.5    # discount factor
 
 # create the environment
 env = gym.make('FetchReach-v1')
+# create policy network
+policy = policyNet().to(device)
 obs = env.reset()
 # manual over-ride of target position
 setTargetPosition(env)
 done = False
 
-# this is code for features, which are currently meaningless
-theta = np.random.randn((40))     # linear function approximation vector
-actionTheta = np.zeros((4))
-nextActionTheta = np.zeros((4))
-
 currEpisodeNum = 0       # initialize episode counter
-lastState = env.reset()['observation'].reshape(-1,1)
-actionTheta[0] = np.matmul(theta[:10], lastState)
-actionTheta[1] = np.matmul(theta[10:20], lastState)
-actionTheta[2] = np.matmul(theta[20:30], lastState)
-actionTheta[3] = np.matmul(theta[-10:], lastState)
-
-while currEpisodeNum < NUM_EPISODES:
+while ( currEpisodeNum < NUM_EPISODES ):
     print('current episode #', currEpisodeNum)
-    lastAction = policy(actionTheta)
-    obs, reward, done, info = env.step(lastAction)
+    action = policy(obs)  
+    obs, reward, done, info = env.step(action)
     env.render()
     if done:
         currEpisodeNum += 1
@@ -104,31 +123,16 @@ while currEpisodeNum < NUM_EPISODES:
         env.reset()
         setTargetPosition(env)
         
-    # update w with Q-learning target
-    lastState = lastState.reshape(-1,1)
-    newState = obs['observation'].reshape(-1,1)
     
-    nextActionTheta[0] = np.matmul(theta[:10], newState)
-    nextActionTheta[1] = np.matmul(theta[10:20], newState)
-    nextActionTheta[2] = np.matmul(theta[20:30], newState)
-    nextActionTheta[3] = np.matmul(theta[-10:], newState)
-    
-    nextAction = policy(actionTheta).reshape(-1,1)
-    
-    lastAction = lastAction.reshape(-1,1)
-    Q_sa_next = np.matmul(nextActionTheta, nextAction)
-    Q_sa_curr = np.matmul(actionTheta,  lastAction)
-    
-    theta = theta - 2*lr*(reward+discountFactor*Q_sa_next-Q_sa_curr)
-    lastState = newState
-    actionTheta = nextActionTheta
+    print('\n\last action\n', action)
 
+   
     # If we want, we can substitute a goal here and re-compute
     # the reward. For instance, we can just pretend that the desired
     # goal was what we achieved all along.
-    substitute_goal = obs['achieved_goal'].copy()
-    substitute_reward = env.compute_reward(
-        obs['achieved_goal'], substitute_goal, info)
-    print('reward is {}, substitute_reward is {}'.format(
-        reward, substitute_reward))
-    print('theta', theta)
+    #substitute_goal = obs['achieved_goal'].copy()
+    #substitute_reward = env.compute_reward(
+    #    obs['achieved_goal'], substitute_goal, info)
+    #print('reward is {}, substitute_reward is {}'.format(
+    #    reward, substitute_reward))
+    #print('theta', theta)
