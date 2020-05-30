@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import gym
-
+import matplotlib.pyplot as plt
 
 # comment line below if you are running without cuda
 device = torch.device("cuda")
@@ -44,8 +44,8 @@ class valueNet(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
-        value = x.cpu().detach().numpy().reshape(1)
-        return value
+        #value = x.cpu().detach().numpy().reshape(1)
+        return x
 
     def num_flat_features(self, x):
         size = x.size()[1:]  # all dimensions except the batch dimension
@@ -160,19 +160,15 @@ def computeTD(sampleTuples, lmbd=0.95):
 
     Returns
     -------
-    None.
-    PARTIALLY IMPLEMENTED NOT YET FINISHED
+    Gt: TD target for a randomly sampled tuple
+    state: feature vector of sampled tuple
 
     '''
     numTimeSteps = len(sampleTuples)
     # randomly sample a tuple
     tupleIX = int( numTimeSteps*np.random.rand() )
-    print("Randomly selected tuple", tupleIX)
-    #print("discount factor:", discountFactor)
-    #print("Lambda:", lmbd)
+    print("randomly selected tuple #", tupleIX)
 
-    #targetsTD = np.zeros((numTimeSteps))     # will hold target for each tuple
-    #for timeStep in range(numTimeSteps):
     Gt = 0
     discountedRewards = 0
     for futureTimeStep in range(tupleIX+1, numTimeSteps):
@@ -181,20 +177,20 @@ def computeTD(sampleTuples, lmbd=0.95):
         discountedRewards += (discountFactor**n) * futureReward
         if ( (futureTimeStep + 1) != numTimeSteps):
             nextState = sampleTuples[futureTimeStep+1]['state']
-            #nextState = torch.from_numpy(nextState).float().to(device)
-            Gt += lmbd**n * (discountedRewards + (discountFactor**n) * value(nextState))
+            valueEstimate = value(nextState)
+            #valueEstimte = valueEstimate.cpu().detach().numpy().reshape(1)
+            Gt += lmbd**n * (discountedRewards + (discountFactor**n) * valueEstimate)
         else:
             Gt += (lmbd**n) * discountedRewards
     Gt = (1-lmbd)*Gt
-    #print("discounted rewards were", discountedRewards)
-
-    return Gt
+    state = sampleTuples[tupleIX]['state']
+    return torch.tensor(Gt), state
         
 
 # define some values
-NUM_EPISODES = 5        # number of episodes we will train on
+NUM_EPISODES = 200        # number of episodes we will train on
 lr = 1e-3               # learning rate for Q-learning
-discountFactor = 0.5    # discount factor 
+discountFactor = 0.95    # discount factor 
 
 # create the environment
 env = gym.make('FetchReach-v1')
@@ -202,10 +198,23 @@ env = gym.make('FetchReach-v1')
 policy = policyNet().to(device)
 value = valueNet().to(device)
 
+
+# MSE loss is used for value network
+valueLoss = nn.MSELoss()
+# SGD is used for optimization of value network
+optimizer = optim.SGD(value.parameters(), lr=0.01)
+
+
 # manual over-ride of target position
 obs = env.reset()
 setTargetPosition(env)
 done = False
+
+#####
+#used for debugging
+TD_targs = []
+valHist = []
+#####
 
 currEpisodeNum = 0                           # initialize episode counter
 SIZE_OF_DATA = env._max_episode_steps        # how many data tuples to store
@@ -225,8 +234,17 @@ while ( currEpisodeNum < NUM_EPISODES ):
         env.reset()
         setTargetPosition(env)
         currTimeStep=0
-        targetsTD = computeTD(D)
-        print("targets:", targetsTD)
+        TD_target, state = computeTD(D)
+        valueEstimate = value(state)
+        print("TD target:", TD_target.item())
+        print("value function approximation:", valueEstimate.item())
+        loss = valueLoss(TD_target,  valueEstimate)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()    # Does the update
+        TD_targs.append(TD_target.item())
+        valHist.append(valueEstimate.item())
+
         
     
 
@@ -240,3 +258,12 @@ while ( currEpisodeNum < NUM_EPISODES ):
     #print('reward is {}, substitute_reward is {}'.format(
     #    reward, substitute_reward))
     #print('theta', theta)
+
+
+plt.plot(np.array(TD_targs))
+plt.plot(np.array(valHist))
+plt.legend(["TD Target", "Value Approximator"])
+#criterion = nn.MSELoss()
+
+#loss = criterion(output, target)
+#print(loss)
