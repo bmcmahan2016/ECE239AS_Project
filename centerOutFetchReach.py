@@ -64,9 +64,9 @@ class policyNet(nn.Module):
         # variance of gaussian from which we draw actions; treated as hyper-parameter
         self.var = 1
         
-    def forward(self, state):
+    def forward(self, x):
         # flatten the state into a vector (16,)
-        x = np.hstack((state['observation'], state['achieved_goal'], state['desired_goal']))
+        #x = np.hstack((state['observation'], state['achieved_goal'], state['desired_goal']))
         # place state vector into a torch tensor
         x = torch.from_numpy(x).to(device)
         x = x.float()
@@ -77,8 +77,9 @@ class policyNet(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
-        action = x.cpu().detach().numpy().reshape(4)
-        return action + self.var*np.random.randn(4)
+        #action = x.cpu().detach().numpy().reshape(4)
+        actionMean = x #+ torch.randn(4, device=device)*self.var
+        return actionMean #+ self.var*np.random.randn(4)
 
     def num_flat_features(self, x):
         size = x.size()[1:]  # all dimensions except the batch dimension
@@ -167,7 +168,7 @@ def computeTD(sampleTuples, lmbd=0.95):
     numTimeSteps = len(sampleTuples)
     # randomly sample a tuple
     tupleIX = int( numTimeSteps*np.random.rand() )
-    print("randomly selected tuple #", tupleIX)
+    #print("randomly selected tuple #", tupleIX)
 
     Gt = 0
     discountedRewards = 0
@@ -184,11 +185,11 @@ def computeTD(sampleTuples, lmbd=0.95):
             Gt += (lmbd**n) * discountedRewards
     Gt = (1-lmbd)*Gt
     state = sampleTuples[tupleIX]['state']
-    return torch.tensor(Gt), state
+    return torch.tensor(Gt), state, sampleTuples[tupleIX]['action']
         
 
 # define some values
-NUM_EPISODES = 200        # number of episodes we will train on
+NUM_EPISODES = 10000        # number of episodes we will train on
 lr = 1e-3               # learning rate for Q-learning
 discountFactor = 0.95    # discount factor 
 
@@ -203,6 +204,7 @@ value = valueNet().to(device)
 valueLoss = nn.MSELoss()
 # SGD is used for optimization of value network
 optimizer = optim.SGD(value.parameters(), lr=0.01)
+policyOptimizer = optim.SGD(policy.parameters(), lr=2e-5)
 
 
 # manual over-ride of target position
@@ -220,33 +222,54 @@ currEpisodeNum = 0                           # initialize episode counter
 SIZE_OF_DATA = env._max_episode_steps        # how many data tuples to store
 D = np.empty((SIZE_OF_DATA), dtype=list)     # holds the episode tuples
 currTimeStep = 0
+
+finalDist = []    
 while ( currEpisodeNum < NUM_EPISODES ):
     
-    action = policy(obs)  
+    action = policy(getFeatureVector(obs))  
+    action = action + torch.randn(4, device=device)
+    action = action.cpu().detach().numpy().reshape(4)
     obs, reward, done, info = env.step(action)
     D[currTimeStep] = {'state' : getFeatureVector(obs), 'action' : action, 'reward' : reward}
     currTimeStep += 1
+    # if (currEpisodeNum > 190):
     #env.render()
     if done:
         currEpisodeNum += 1
-        print('\ncurrent episode #', currEpisodeNum)
+        #print('\ncurrent episode #', currEpisodeNum)
         done = False
         env.reset()
+        env.env.distance_threshold = .1
         setTargetPosition(env)
         currTimeStep=0
-        TD_target, state = computeTD(D)
+        TD_target, state, actionPlayed = computeTD(D)
+        
         valueEstimate = value(state)
-        print("TD target:", TD_target.item())
-        print("value function approximation:", valueEstimate.item())
+        #print("value function approximation:", valueEstimate.item())
         loss = valueLoss(TD_target,  valueEstimate)
+        
+        # update the value network
         optimizer.zero_grad()
         loss.backward()
-        optimizer.step()    # Does the update
+        optimizer.step()    # Does the 
+        policyOptimizer.step()
         TD_targs.append(TD_target.item())
         valHist.append(valueEstimate.item())
-
         
-    
+        # update the policy network
+        policyOptimizer.zero_grad()
+        advantage = TD_target - valueEstimate
+        actionMean = policy(state)
+        actionPlayed = torch.tensor(action).view(1,4).float().to(device)
+        v = -(actionPlayed-actionMean)*advantage
+        actionMean.backward(v)
+        policyOptimizer.step()
+        finalDist.append(np.sum((obs['achieved_goal'] - obs['desired_goal'])**2))
+        print(finalDist[-1])
+        
+        
+
+
 
    
     # If we want, we can substitute a goal here and re-compute
@@ -260,6 +283,10 @@ while ( currEpisodeNum < NUM_EPISODES ):
     #print('theta', theta)
 
 
+plt.figure()
+plt.plot(np.array(finalDist))
+
+plt.figure()
 plt.plot(np.array(TD_targs))
 plt.plot(np.array(valHist))
 plt.legend(["TD Target", "Value Approximator"])
