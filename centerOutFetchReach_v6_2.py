@@ -196,25 +196,22 @@ def computeTDBatch(sampleTuples, lmbd=0.95, tupleIX=None):
         actions[l] = action
     return Gts, states, actions
 
-def actionProbabilityRatio(policy, oldpolicy, state, action, sigmainv):
-    oldmu = oldpolicy(state)
-    action = torch.from_numpy(action)
-    old_a_mu = action - oldmu
-    #pdb.set_trace()
-    oldpolicyprob = torch.diag(torch.exp(-0.5*(old_a_mu@sigmainv@old_a_mu.T))).detach()
+def clipLoss(policy, oldpolicy, state, action, advantage, delta=0.1, eps=0.1):
+    amu = action - policy(state)
+    siginv = 1/delta*torch.eye(4)
+    prob = torch.exp(-0.5*torch.diag(amu@siginv@amu.T))
     
-    mu = policy(state)
-    a_mu = action - oldmu
-    newpolicyprob = torch.diag(torch.exp(-0.5*(a_mu@sigmainv@a_mu.T)))
-    
-    output = newpolicyprob/oldpolicyprob
+    oldamu = (action - oldpolicy(state)).detach()
+    oldprob = torch.exp(-0.5*torch.diag(oldamu@siginv@oldamu.T))
+    wi = prob/oldprob
+    output = -torch.mean(torch.min(wi*advantage, torch.clamp(wi, 1-eps, 1+eps)*advantage))
     return output
 
 # define some values
-NUM_EPISODES = 50        # number of episodes we will train on
+NUM_EPISODES = 1000        # number of episodes we will train on
 lr = 1e-3               # learning rate for Q-learning
 discountFactor = 0.95    # discount factor
-delta = 0.05    # single-dimension standard deviation of additive action noise
+delta = 0.1    # single-dimension standard deviation of additive action noise
 epsilon = 0.1
 
 # create the environment
@@ -228,7 +225,7 @@ value = valueNet().to(device)
 valueLoss = nn.MSELoss()
 # SGD is used for optimization of value network
 valueOptimizer = optim.SGD(value.parameters(), lr=0.001)
-policyOptimizer = optim.SGD(policy.parameters(), lr=0.001)
+policyOptimizer = optim.SGD(policy.parameters(), lr=0.0001)
 
 #####
 #used for debugging
@@ -247,6 +244,7 @@ testvec = np.random.randn(1, 16)
 testvechist = []
 Xhist = []
 targetHist = []
+valueHist = []
 
 t0 = time.time()
 for currEpisodeNum in range(NUM_EPISODES):
@@ -277,16 +275,18 @@ for currEpisodeNum in range(NUM_EPISODES):
         direction /= np.linalg.norm(direction)
         reward = np.dot(vel, direction)/np.linalg.norm(vel)
         ###
-        D[currTimeStep] = {'state' : getFeatureVector(old_obs), 'next_state': getFeatureVector(obs), 'action' : action, 'reward' : reward}
+        D[currTimeStep] = {'state' : getFeatureVector(old_obs), 'next_state': getFeatureVector(obs), 
+                           'action' : action, 'reward' : reward}
         if done:
             D = D[0:currTimeStep+1]
-            print(currEpisodeNum, currTimeStep)
+            #print(currEpisodeNum, currTimeStep)
             break
     #
     done = False
     
     TD_target, state, actionPlayed = computeTDBatch(D)
     valueEstimate = value(state)
+    valueHist.append(valueEstimate.detach().numpy())
     #print(TD_target.shape, valueEstimate.shape)
     loss = valueLoss(TD_target, valueEstimate)
     
@@ -303,26 +303,18 @@ for currEpisodeNum in range(NUM_EPISODES):
     oldPolicyNetwork = copy.deepcopy(policy)
     policyOptimizer.zero_grad()
     advantage = (TD_target - valueEstimate).detach()
-    
-    wi = actionProbabilityRatio(policy, oldPolicyNetwork, stateHist, actionHist, 
-                                1/delta*torch.eye(4, dtype=torch.double))
-    
-    policyClipLoss = (-torch.min(wi*advantage, torch.clamp(wi, 1-epsilon, 1+epsilon)*advantage)).mean()
-    policyClipLoss = -(wi*advantage).mean()
+
+
+    policyClipLoss = clipLoss(policy, oldPolicyNetwork, stateHist, torch.FloatTensor(actionHist), advantage)
+    #print(policyClipLoss.item())
     policyClipLoss.backward()
-    
     policyOptimizer.step()
-    #pdb.set_trace()
     
-    #actionMean = policy(state)
-    #actionPlayed = torch.FloatTensor(actionPlayed).to(device)
-    #v = -(actionPlayed-actionMean)*advantage
-    #actionMean.backward(v)
-    #policyOptimizer.step()
-    finalDist.append(np.sum((obs['achieved_goal'] - obs['desired_goal'])**2))
+    finalDist.append(np.sqrt(np.sum((obs['achieved_goal'] - obs['desired_goal'])**2)))
     
     testvecpol = torch.norm(policy(testvec)).item()
     #print(currEpisodeNum, np.round(testvecpol, 3), np.round(finalDist[-1], 3))
+    print(currEpisodeNum, np.round(finalDist[-1], 3))
     testvechist.append(testvecpol)
     pass
 
@@ -334,5 +326,6 @@ datadict['TD_targs'] = TD_targs
 datadict['finalDist'] = finalDist
 datadict['train_time'] = time.time() - t0
 datadict['testvechist'] = testvechist
+datadict['valueHist'] = valueHist
 sio.savemat('data_' + str(NUM_EPISODES) + 'iter.mat', datadict)
 
